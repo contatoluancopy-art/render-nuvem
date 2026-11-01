@@ -1,0 +1,53 @@
+# Renderiza um vídeo do canal bíblico em paralelo: uma máquina por bloco (parte-bNN.html), até 20 ao mesmo tempo.
+# Disparado pelo canal-biblico/_esteira/render_nuvem.py (gh workflow run). Saída: um artefato bNN com o mp4 sem áudio.
+name: render
+on:
+  workflow_dispatch:
+    inputs:
+      video:
+        description: pasta do vídeo dentro de jobs/
+        required: true
+      fps:
+        default: "24"
+jobs:
+  plano:
+    runs-on: ubuntu-latest
+    outputs:
+      blocos: ${{ steps.b.outputs.blocos }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: jobs/${{ inputs.video }}/partes
+      - id: b
+        run: echo "blocos=$(jq -c '[.[].id]' 'jobs/${{ inputs.video }}/partes/blocos.json')" >> "$GITHUB_OUTPUT"
+  render:
+    needs: plano
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        bloco: ${{ fromJson(needs.plano.outputs.blocos) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: jobs/${{ inputs.video }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null
+      - name: render
+        working-directory: jobs/${{ inputs.video }}
+        run: |
+          start=$(date +%s)
+          npx -y hyperframes@0.8.198 render -c parte-${{ matrix.bloco }}.html -o out/${{ matrix.bloco }}.mp4 --workers 4 --fps ${{ inputs.fps }} --quality looks --quiet
+          echo "levou $(( ($(date +%s) - start) / 60 )) min"
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.bloco }}
+          path: jobs/${{ inputs.video }}/out/${{ matrix.bloco }}.mp4
+          retention-days: 3
+          compression-level: 0
